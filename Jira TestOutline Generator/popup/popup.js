@@ -28,7 +28,7 @@ function getAllH1Content() {
   };
 }
 
-// Hàm để tạo và tải file txt
+// Hàm để tạo và tải file txt với thư mục cố định
 async function downloadTitles(data) {
   // Tạo tên file dựa trên task ID hoặc ngày tháng
   let filename;
@@ -39,7 +39,7 @@ async function downloadTitles(data) {
     filename = `h1_titles_${currentDate}.txt`;
   }
   
-  // Tạo tên thư mục cố định
+  // Tạo đường dẫn thư mục cố định
   const folderName = 'JiraTestOutlines';
   const fullPath = `${folderName}/${filename}`;
   
@@ -55,37 +55,63 @@ async function downloadTitles(data) {
     fileContent += `${title.index}. ${title.text}\n`;
   });
 
-  // Tạo blob và tải xuống
+  // Tạo blob
   const blob = new Blob([fileContent], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   
   try {
+    // Thử tạo thư mục và lưu file
+    await ensureDirectoryAndDownload(url, fullPath, filename);
+    console.log(`File saved successfully: ${fullPath}`);
+    
+    // Giải phóng URL
+    URL.revokeObjectURL(url);
+    return { success: true, filename: filename, path: fullPath };
+    
+  } catch (error) {
+    console.error('Download error:', error);
+    // Giải phóng URL trong trường hợp lỗi
+    URL.revokeObjectURL(url);
+    throw new Error(`Không thể lưu file: ${error.message}`);
+  }
+}
+
+// Hàm đảm bảo thư mục tồn tại và tải file xuống
+async function ensureDirectoryAndDownload(url, fullPath, filename) {
+  try {
+    // Thử tải file vào thư mục đã định sẵn
     await chrome.downloads.download({
       url: url,
       filename: fullPath,
-      saveAs: false  // Tự động lưu vào thư mục Downloads/JiraTestOutlines
+      saveAs: false,
+      conflictAction: 'overwrite'  // Ghi đè nếu file đã tồn tại
     });
-    console.log(`File saved: ${fullPath}`);
-    return { success: true, filename: filename, path: fullPath };
-  } catch (error) {
-    console.error('Download error:', error);
+    
+  } catch (primaryError) {
+    console.log('Thư mục có thể chưa tồn tại, thử tạo thư mục...');
+    
     try {
-      // Fallback: lưu với saveAs = true nếu có lỗi
+      // Thử tạo file trong thư mục (Chrome sẽ tự tạo thư mục nếu chưa có)
+      await chrome.downloads.download({
+        url: url,
+        filename: fullPath,
+        saveAs: false,
+        conflictAction: 'uniquify'  // Tạo tên file unique nếu trung
+      });
+      
+    } catch (secondaryError) {
+      console.log('Không thể tự động tạo thư mục, fallback to manual save...');
+      
+      // Fallback cuối: cho user chọn vị trí lưu
       await chrome.downloads.download({
         url: url,
         filename: filename,
         saveAs: true
       });
-      console.log(`File saved with saveAs: ${filename}`);
-      return { success: true, filename: filename, path: filename };
-    } catch (fallbackError) {
-      console.error('Fallback download error:', fallbackError);
-      throw new Error(`Không thể lưu file: ${fallbackError.message}`);
+      
+      throw new Error('Đã lưu file thành công nhưng bạn cần chọn vị trí lưu thủ công');
     }
   }
-
-  // Giải phóng URL
-  URL.revokeObjectURL(url);
 }
 
 // Log khi popup được load
@@ -144,13 +170,22 @@ document.getElementById("generate").addEventListener("click", async () => {
         const downloadResult = await downloadTitles(content);
         
         // Thông báo đã lưu file thành công
-        const successMsg = content.taskId 
-          ? `\n✅ Đã lưu file: ${content.taskId}.txt vào thư mục JiraTestOutlines`
-          : `\n✅ Đã lưu file vào thư mục JiraTestOutlines`;
+        let successMsg;
+        if (content.taskId) {
+          successMsg = `\n✅ Đã lưu file: ${content.taskId}.txt`;
+        } else {
+          successMsg = `\n✅ Đã lưu file thành công`;
+        }
+        successMsg += `\n📁 Vị trí: Downloads/JiraTestOutlines/`;
         outputDiv.innerText += successMsg;
+        
       } catch (downloadError) {
         console.error("Download error:", downloadError);
-        outputDiv.innerText += `\n❌ Lỗi khi lưu file: ${downloadError.message}`;
+        let errorMsg = `\n⚠️ ${downloadError.message}`;
+        if (downloadError.message.includes('thủ công')) {
+          errorMsg += `\n💡 Lần sau thư mục sẽ được tạo tự động.`;
+        }
+        outputDiv.innerText += errorMsg;
       }
     } else {
       outputDiv.innerText = "Không tìm thấy thẻ H1 nào trên trang.";
